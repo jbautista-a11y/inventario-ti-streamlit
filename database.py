@@ -144,3 +144,12 @@ def eliminar_registro_inventario(id_sel):
         st.cache_data.clear()
         return True
     except: return False
+
+def obtener_logs():
+    """Obtiene los últimos 100 logs sin guardar en caché (tiempo real)"""
+    if not supabase: return pd.DataFrame()
+    try:
+        response = supabase.table('logs_auditoria').select("*").order('fecha', desc=True).limit(100).execute()
+        return pd.DataFrame(response.data)
+    except Exception as e:
+        return pd.DataFrame()
