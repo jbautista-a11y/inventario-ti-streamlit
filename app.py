@@ -295,32 +295,36 @@ if auth.verificar_sesion(cookies):
             st.warning("No se encontraron resultados.")
 
     # TABS ADMIN
-    if st.session_state.rol_actual == "Administrador":
+if st.session_state.rol_actual == "Administrador":
         with tabs[5]:
-            if st.button("🔄 Refrescar"): st.rerun()
-            try: st.dataframe(pd.DataFrame(db.supabase.table('logs_auditoria').select("*").order('fecha', desc=True).limit(100).execute().data), use_container_width=True)
-            except: pass
-        with tabs[6]:
-            c1, c2 = st.columns(2)
-            with c1:
-                with st.form("nu"):
-                    st.write("##### Nuevo Acceso")
-                    m = st.text_input("Email/Usuario"); r = st.selectbox("Rol", ["Soporte", "Administrador"])
-                    if st.form_submit_button("Crear Usuario"): 
-                        ok, msg = db.guardar_nuevo_usuario(m, r)
-                        if ok: st.success(msg); time.sleep(1); st.rerun()
-                        else: st.error(msg)
+            st.subheader("📜 Auditoría del Sistema")
+            
+            # Botón con limpieza de caché
+            col_btn, col_info = st.columns([1, 5])
+            with col_btn:
+                if st.button("🔄 Refrescar Datos", use_container_width=True):
+                    st.cache_data.clear()  # <--- ESTO ES LA SOLUCIÓN
+                    st.rerun()
+            
+            # Llamamos a la nueva función de database.py
+            df_logs = db.obtener_logs()
+            
+            if not df_logs.empty:
+                # Formatear la fecha para que sea legible
+                try:
+                    df_logs["fecha"] = pd.to_datetime(df_logs["fecha"]).dt.strftime('%d/%m/%Y %H:%M:%S')
+                except: pass
                 
-                st.write("##### Eliminar Acceso")
-                # Selección de usuario para eliminar (evitando eliminarse a sí mismo)
-                df_u = db.cargar_usuarios()
-                users_list = [x for x in df_u["usuario"].tolist() if x != st.session_state.usuario_actual]
-                u_del = st.selectbox("Seleccione usuario:", users_list) if users_list else None
-                
-                if u_del and st.button("Eliminar Usuario", type="primary"):
-                    if db.eliminar_usuario(u_del):
-                        st.success(f"Eliminado: {u_del}"); time.sleep(1); st.rerun()
-
-            with c2: 
-                st.write("##### Usuarios Activos")
-                st.dataframe(db.cargar_usuarios(), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    df_logs, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "fecha": st.column_config.TextColumn("Fecha y Hora", width="medium"),
+                        "usuario": st.column_config.TextColumn("Usuario", width="medium"),
+                        "accion": st.column_config.TextColumn("Acción", width="small"),
+                        "detalle": st.column_config.TextColumn("Detalle", width="large"),
+                    }
+                )
+            else:
+                st.info("No hay registros de auditoría aún.")
