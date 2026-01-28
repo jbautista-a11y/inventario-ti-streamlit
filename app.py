@@ -146,17 +146,53 @@ if auth.verificar_sesion(cookies):
 
     # 2. CONSULTAR
     with tabs[1]:
-        st.subheader("Base de Datos")
-        q_fast = st.text_input("Filtrar en tabla:", placeholder="Escriba marca, usuario, serie...", key="search_tab1").upper()
+        st.subheader("🔎 Consulta Avanzada de Inventario")
         
-        df_view = df.drop(columns=["_supabase_id"], errors="ignore")
-        if q_fast: 
-            # Búsqueda visual rápida
-            mask = df_view.astype(str).apply(lambda x: x.str.contains(q_fast, na=False)).any(axis=1)
-            df_view = df_view[mask]
+        # --- A. FILTROS POR CATEGORÍA ---
+        with st.expander("🎛️ Filtros Específicos", expanded=True):
+            f1, f2, f3, f4 = st.columns(4)
             
-        st.dataframe(df_view, use_container_width=True, hide_index=True)
+            # Obtenemos opciones únicas reales de la DB
+            opts_tipo = obtener_opciones_filtro(df, "TIPO")
+            opts_marca = obtener_opciones_filtro(df, "MARCA")
+            opts_modelo = obtener_opciones_filtro(df, "MODELO")
+            opts_area = obtener_opciones_filtro(df, "ÁREA")
+            
+            # Multiselects para poder elegir varios (Ej: HP y DELL al mismo tiempo)
+            with f1: sel_tipo = st.multiselect("Tipo", opts_tipo, key="f_tipo")
+            with f2: sel_marca = st.multiselect("Marca", opts_marca, key="f_marca")
+            with f3: sel_modelo = st.multiselect("Modelo", opts_modelo, key="f_modelo")
+            with f4: sel_area = st.multiselect("Área", opts_area, key="f_area")
 
+        # --- B. BARRA DE BÚSQUEDA TEXTUAL ---
+        q_search = st.text_input("🔍 Buscar por: Usuario, Serie, Activo o Nuevo Activo", 
+                                 placeholder="Ej: Juan Perez o CDN12345", 
+                                 key="search_tab1").upper().strip()
+
+        # --- C. LÓGICA DE FILTRADO ---
+        df_c = df.drop(columns=["_supabase_id"], errors="ignore") # Copia limpia
+        
+        # 1. Aplicar filtros de listas (si el usuario seleccionó algo)
+        if sel_tipo: df_c = df_c[df_c["TIPO"].isin(sel_tipo)]
+        if sel_marca: df_c = df_c[df_c["MARCA"].isin(sel_marca)]
+        if sel_modelo: df_c = df_c[df_c["MODELO"].isin(sel_modelo)]
+        if sel_area: df_c = df_c[df_c["ÁREA"].isin(sel_area)]
+        
+        # 2. Aplicar búsqueda de texto (si escribió algo)
+        if q_search:
+            # Busca SOLO en las columnas clave que pediste
+            mask = (
+                df_c["USUARIO"].astype(str).str.contains(q_search, na=False) |
+                df_c["NRO DE SERIE"].astype(str).str.contains(q_search, na=False) |
+                df_c["ACTIVO"].astype(str).str.contains(q_search, na=False) |
+                df_c["NUEVO ACTIVO"].astype(str).str.contains(q_search, na=False)
+            )
+            df_c = df_c[mask]
+
+        # --- D. MOSTRAR RESULTADOS ---
+        st.caption(f"Mostrando {len(df_c)} registros coincidentes.")
+        st.dataframe(df_c, use_container_width=True, hide_index=True)
+        
     # 3. NUEVO (AQUÍ SÍ USAMOS LISTAS PARA AYUDAR A ESCRIBIR)
     with tabs[2]:
         st.subheader("Nuevo Ingreso")
