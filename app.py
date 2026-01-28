@@ -9,22 +9,34 @@ from datetime import datetime
 from streamlit_cookies_manager import EncryptedCookieManager
 import openpyxl
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.styles import Font, PatternFill
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestión de Inventario TI", layout="wide", page_icon="🖥️")
 
-# --- CONFIGURACIÓN SUPABASE ---
+# --- ESTILOS CSS (Igual que tu versión local) ---
+st.markdown("""
+    <style>
+        .block-container { padding-top: 2rem !important; }
+        .stTabs { margin-top: 0px !important; }
+        hr { margin-top: 10px !important; margin-bottom: 10px !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- CONFIGURACIÓN SUPABASE (Reemplaza al Excel Maestro) ---
 @st.cache_resource
 def init_supabase():
-    """Inicializa conexión a Supabase usando secrets"""
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
-supabase: Client = init_supabase()
+try:
+    supabase: Client = init_supabase()
+except Exception as e:
+    st.error(f"Error conectando a la base de datos: {e}")
+    st.stop()
 
-# --- CONFIGURACIÓN MICROSOFT (AZURE AD) ---
-# Asegúrate de que estos nombres coincidan con tus secrets en Streamlit Cloud
+# --- CONFIGURACIÓN MICROSOFT (Igual que local) ---
 CLIENT_ID = st.secrets["CLIENT_ID"]
 TENANT_ID = st.secrets["TENANT_ID"]
 CLIENT_SECRET = st.secrets["CLIENT_SECRET"]
@@ -33,17 +45,11 @@ SCOPE = ["User.Read"]
 REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
 # --- GESTOR DE COOKIES ---
-# Usa una clave secreta fuerte en tus secrets o usa el valor por defecto
 cookies = EncryptedCookieManager(password=st.secrets.get("COOKIE_PASSWORD", "esandata_secret_key_2024"))
-
 if not cookies.ready():
-    with st.spinner("Cargando sistema de autenticación..."):
-        st.stop()
+    st.stop()
 
-# --- CONSTANTES Y LISTAS MAESTRAS ---
-PLANTILLA_EXCEL = 'Acta de Asignación Equipos - V3.xlsx' # Debe estar en tu repo de GitHub
-
-# Definimos las columnas EXACTAS que usa tu versión local para mantener compatibilidad
+# --- DEFINICIÓN DE COLUMNAS (EXACTA A TU EXCEL LOCAL) ---
 COLUMNAS_EXCEL = [
     "N°", "USUARIO", "EQUIPO", "ÁREA", "DIRECCIÓN", "UBICACIÓN", 
     "NUEVO ACTIVO", "ACTIVO", "TIPO", "NRO DE SERIE", "MARCA", "MODELO", 
@@ -52,40 +58,22 @@ COLUMNAS_EXCEL = [
     "ACTA DE  ASIGNACIÓN", "ADM- LOCAL", "ORIGEN_HOJA", "Ultima_Actualizacion", "MODIFICADO_POR"
 ]
 
-# Mapeo: Nombre Columna Excel -> Nombre Columna Supabase (minusculas, sin espacios)
-# IMPORTANTE: Tu tabla 'inventario' en Supabase debe tener estas columnas.
+# Mapeo para traducir de Supabase (minúsculas) a tu Excel (Mayúsculas)
 MAPEO_DB = {
-    "N°": "numero",
-    "USUARIO": "usuario",
-    "EQUIPO": "equipo",
-    "ÁREA": "area",
-    "DIRECCIÓN": "direccion",
-    "UBICACIÓN": "ubicacion",
-    "NUEVO ACTIVO": "nuevo_activo",
-    "ACTIVO": "activo",
-    "TIPO": "tipo",
-    "NRO DE SERIE": "nro_serie",
-    "MARCA": "marca",
-    "MODELO": "modelo",
-    "AÑO DE ADQUISICIÓN": "anio_adquisicion",
-    "PROCESADOR": "procesador",
-    "MEMORIA RAM": "memoria_ram",
-    "DISCO DURO": "disco_duro",
-    "ESTADO": "estado",
-    "COMPONENTE": "componente",
-    "COSTO": "costo",
-    "ACCESORIOS": "accesorios",
-    "OBSERVACIONES": "observaciones",
-    "ACTA DE  ASIGNACIÓN": "acta_asignacion",
-    "ADM- LOCAL": "adm_local",
-    "ORIGEN_HOJA": "origen_hoja",
-    "Ultima_Actualizacion": "ultima_actualizacion",
+    "N°": "numero", "USUARIO": "usuario", "EQUIPO": "equipo", "ÁREA": "area",
+    "DIRECCIÓN": "direccion", "UBICACIÓN": "ubicacion", "NUEVO ACTIVO": "nuevo_activo",
+    "ACTIVO": "activo", "TIPO": "tipo", "NRO DE SERIE": "nro_serie",
+    "MARCA": "marca", "MODELO": "modelo", "AÑO DE ADQUISICIÓN": "anio_adquisicion",
+    "PROCESADOR": "procesador", "MEMORIA RAM": "memoria_ram", "DISCO DURO": "disco_duro",
+    "ESTADO": "estado", "COMPONENTE": "componente", "COSTO": "costo",
+    "ACCESORIOS": "accesorios", "OBSERVACIONES": "observaciones",
+    "ACTA DE  ASIGNACIÓN": "acta_asignacion", "ADM- LOCAL": "adm_local",
+    "ORIGEN_HOJA": "origen_hoja", "Ultima_Actualizacion": "ultima_actualizacion",
     "MODIFICADO_POR": "modificado_por"
 }
+MAPEO_INVERSO = {v: k for k, v in MAPEO_DB.items()}
 
-# Inverso para cuando traemos de DB a Pandas
-MAPEO_DB_INVERSO = {v: k for k, v in MAPEO_DB.items()}
-
+# --- LISTAS BASE (Igual que local) ---
 LISTAS_OPCIONES = {
     "TIPO": ["LAPTOP", "DESKTOP", "MONITOR", "ALL IN ONE", "TABLET", "IMPRESORA", "PERIFERICO"],
     "ESTADO": ["OPERATIVO", "EN REVISIÓN", "MANTENIMIENTO", "BAJA", "HURTO/ROBO", "ASIGNADO"],
@@ -93,76 +81,62 @@ LISTAS_OPCIONES = {
     "ÁREA": ["SOPORTE TI", "ADMINISTRACIÓN", "RECURSOS HUMANOS", "CONTABILIDAD", "COMERCIAL", "MARKETING", "LOGÍSTICA", "DIRECCIÓN", "ACADÉMICO"]
 }
 
-# --- FUNCIONES DE BASE DE DATOS (REEMPLAZAN A EXCEL/TXT) ---
+# --- FUNCIONES AUXILIARES (LOGS Y USUARIOS) ---
 
 def registrar_log(accion, detalle):
-    """Registra en la tabla logs_auditoria de Supabase"""
+    """Guarda en tabla 'logs_auditoria' en lugar de txt"""
     try:
         usuario = st.session_state.get("usuario_actual", "Desconocido")
-        # Supabase maneja 'created_at' automático, pero mandamos fecha local si quieres consistencia visual
-        log_entry = {
+        datos = {
             "usuario": usuario,
             "accion": accion,
             "detalle": detalle,
             "fecha": datetime.now().isoformat()
         }
-        supabase.table('logs_auditoria').insert(log_entry).execute()
+        supabase.table('logs_auditoria').insert(datos).execute()
     except Exception as e:
-        print(f"Error log (no crítico): {e}")
+        print(f"Error log: {e}")
 
-@st.cache_data
 def cargar_usuarios():
-    """Carga usuarios desde Supabase y devuelve DataFrame compatible con local"""
+    """Trae usuarios de Supabase en formato DataFrame compatible con tu código local"""
     try:
         response = supabase.table('usuarios').select("*").execute()
         df = pd.DataFrame(response.data)
-        if df.empty:
-             return pd.DataFrame(columns=["usuario", "clave", "rol"])
+        if df.empty: return pd.DataFrame(columns=["usuario", "clave", "rol"])
         return df
-    except Exception as e:
-        st.error(f"Error conectando a usuarios: {e}")
-        return pd.DataFrame([{"usuario": "admin", "clave": "1234", "rol": "Administrador"}])
+    except:
+        return pd.DataFrame(columns=["usuario", "clave", "rol"])
 
 def guardar_nuevo_usuario(u, r):
     try:
-        df_u = cargar_usuarios()
-        if not df_u.empty and u.lower() in df_u["usuario"].str.lower().values:
+        df = cargar_usuarios()
+        if not df.empty and u.lower() in df["usuario"].str.lower().values:
             return False, "Usuario ya existe"
         
-        nuevo = {"usuario": u.lower(), "clave": "MS_365_ACCESS", "rol": r}
-        supabase.table('usuarios').insert(nuevo).execute()
-        st.cache_data.clear()
-        return True, f"Acceso autorizado para {u}"
+        supabase.table('usuarios').insert({"usuario": u.lower(), "clave": "MS_365_ACCESS", "rol": r}).execute()
+        return True, f"Usuario {u} autorizado."
     except Exception as e:
         return False, f"Error DB: {e}"
 
-def actualizar_mi_clave(u, nueva_c):
+def actualizar_clave_local(usuario, nueva_clave):
     try:
-        # Validar lógica Microsoft
-        df_u = cargar_usuarios()
-        row = df_u[df_u["usuario"] == u]
-        if not row.empty and row.iloc[0]["clave"] == "MS_365_ACCESS":
-            return False, "Usuarios Microsoft no pueden cambiar clave aquí."
-            
-        supabase.table('usuarios').update({"clave": nueva_c}).eq('usuario', u).execute()
+        supabase.table('usuarios').update({"clave": nueva_clave}).eq("usuario", usuario).execute()
         registrar_log("SEGURIDAD", "Cambio de clave local")
-        st.cache_data.clear()
         return True, "Clave actualizada"
     except Exception as e:
-        return False, f"Error: {e}"
+        return False, str(e)
 
-# --- NÚCLEO DE DATOS (EL CEREBRO DE LA APP) ---
+# --- NÚCLEO DE DATOS: LEER/ESCRIBIR SUPABASE ---
 
 @st.cache_data
 def obtener_datos():
     """
-    Trae todo el inventario de Supabase y lo convierte al formato EXACTO
-    del Excel local para que los filtros y dashboards funcionen igual.
+    Descarga TODO el inventario y lo transforma al formato EXACTO de tu Excel local.
+    Esto garantiza que tus filtros y dashboards funcionen igual.
     """
     try:
-        # Traemos todo. Si es mucha data, Supabase pagina (max 1000 por defecto), 
-        # pero para empezar esto funciona.
-        response = supabase.table('inventario').select("*").order('id', desc=False).execute()
+        # Traemos hasta 5000 registros para asegurar que venga todo
+        response = supabase.table('inventario').select("*").limit(5000).order('id', desc=False).execute()
         data = response.data
         
         if not data:
@@ -170,80 +144,69 @@ def obtener_datos():
             
         df = pd.DataFrame(data)
         
-        # Renombramos columnas de DB (minusculas) a Excel (Mayusculas)
-        df = df.rename(columns=MAPEO_DB_INVERSO)
+        # 1. Renombrar columnas de DB (minúsculas) a Excel (Mayúsculas)
+        df = df.rename(columns=MAPEO_INVERSO)
         
-        # Aseguramos que todas las columnas existan, llenando vacíos con "-"
+        # 2. Asegurar que existan todas las columnas del Excel original
         for col in COLUMNAS_EXCEL:
             if col not in df.columns:
                 df[col] = "-"
         
-        # Convertir NaN a "-" para evitar errores en filtros
-        df = df.fillna("-")
+        # 3. Limpieza de datos (Nulls a guiones o vacíos, strings en mayúsculas)
+        df = df.fillna("")
         
-        # Asegurar tipos string para búsquedas
-        df = df.astype(str)
-        
-        # Preservar el ID de Supabase para poder editar/borrar luego
-        # (Aunque no esté en COLUMNAS_EXCEL visualmente, lo mantenemos en el DF)
+        # Guardamos el ID de supabase en una columna oculta para poder editar luego
         if "id" in pd.DataFrame(data).columns:
-             df["_supabase_id"] = pd.DataFrame(data)["id"]
+            df["_supabase_id"] = pd.DataFrame(data)["id"]
         
+        # Forzar mayúsculas para búsquedas, excepto columnas numéricas o fecha si las hubiera
+        for col in df.columns:
+            if col != "_supabase_id":
+                df[col] = df[col].astype(str).str.upper().str.strip()
+                # Reemplazar "NAN" o "NONE" string por vacío visual
+                df[col] = df[col].replace(["NAN", "NONE"], "")
+                
         return df
-        
     except Exception as e:
-        st.error(f"Error cargando inventario: {e}")
+        st.error(f"Error cargando datos: {e}")
         return pd.DataFrame(columns=COLUMNAS_EXCEL)
 
-def agregar_registro_bd(nuevo_dato_dict):
-    """Transforma el diccionario visual a formato DB e inserta"""
+def guardar_registro_db(datos_dict, es_nuevo=True, id_supabase=None):
+    """Guarda o actualiza registros mapeando de vuelta a nombres de DB"""
     try:
-        registro_db = {}
-        for col_excel, valor in nuevo_dato_dict.items():
-            if col_excel in MAPEO_DB:
-                registro_db[MAPEO_DB[col_excel]] = valor
+        datos_db = {}
+        # Mapeamos claves del Excel (Mayúsculas) a DB (minúsculas)
+        for k, v in datos_dict.items():
+            if k in MAPEO_DB:
+                datos_db[MAPEO_DB[k]] = v
         
         # Metadatos automáticos
-        registro_db["ultima_actualizacion"] = datetime.now().isoformat()
-        registro_db["modificado_por"] = st.session_state.get("usuario_actual", "Sistema")
+        datos_db["ultima_actualizacion"] = datetime.now().isoformat()
+        datos_db["modificado_por"] = st.session_state.get("usuario_actual", "Sistema")
         
-        supabase.table('inventario').insert(registro_db).execute()
-        st.cache_data.clear() # ¡CRUCIAL PARA VER EL CAMBIO AL INSTANTE!
-        return True
-    except Exception as e:
-        st.error(f"Error guardando en Supabase: {e}")
-        return False
-
-def editar_registro_bd(id_supabase, diccionario_cambios):
-    """Actualiza un registro usando su ID de Supabase"""
-    try:
-        cambios_db = {}
-        for col_excel, valor in diccionario_cambios.items():
-            if col_excel in MAPEO_DB:
-                cambios_db[MAPEO_DB[col_excel]] = valor
+        if es_nuevo:
+            # Asignar un número correlativo simple si es nuevo (opcional, visual)
+            # En DB el ID es autoincremental, pero mantenemos tu columna N°
+            datos_db["numero"] = str(int(time.time())) # Usamos timestamp como num temp o lógica propia
+            supabase.table('inventario').insert(datos_db).execute()
+        else:
+            if id_supabase:
+                supabase.table('inventario').update(datos_db).eq('id', id_supabase).execute()
+            else:
+                return False
         
-        cambios_db["ultima_actualizacion"] = datetime.now().isoformat()
-        cambios_db["modificado_por"] = st.session_state.get("usuario_actual", "Sistema")
-
-        supabase.table('inventario').update(cambios_db).eq('id', id_supabase).execute()
-        st.cache_data.clear()
+        st.cache_data.clear() # Limpiar caché para ver cambios inmediatos
         return True
     except Exception as e:
-        st.error(f"Error actualizando: {e}")
+        st.error(f"Error guardando en BD: {e}")
         return False
 
-def eliminar_registro_bd(id_supabase):
-    try:
-        supabase.table('inventario').delete().eq('id', id_supabase).execute()
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Error eliminando: {e}")
-        return False
-
-# --- FUNCIONES UI & REPORTES (IDÉNTICAS AL LOCAL) ---
+# --- FUNCIONES UI (TU LÓGICA DE INTERFAZ) ---
 
 def campo_con_opcion_otro(label, lista_base, valor_actual=None, key_suffix=""):
+    """
+    Tu función personalizada para permitir selección o entrada manual.
+    """
     opciones = list(lista_base)
     opcion_otro = "OTRO (ESPECIFICAR)"
     if opcion_otro not in opciones: opciones.append(opcion_otro)
@@ -251,8 +214,8 @@ def campo_con_opcion_otro(label, lista_base, valor_actual=None, key_suffix=""):
     idx = 0
     modo_manual = False
     
-    # Lógica para preseleccionar valor
-    if valor_actual and valor_actual != "-":
+    # Si hay valor actual y no está en la lista, activamos modo manual
+    if valor_actual and valor_actual not in ["", "-"]:
         if valor_actual in opciones:
             idx = opciones.index(valor_actual)
         else:
@@ -269,31 +232,43 @@ def campo_con_opcion_otro(label, lista_base, valor_actual=None, key_suffix=""):
     return valor_final
 
 def generar_acta_excel(datos, df_completo):
-    """Genera el Excel usando openpyxl (Igual que local)"""
+    """
+    TU LÓGICA EXACTA DE GENERACIÓN DE ACTA CON OPENPYXL
+    """
     try:
-        wb = openpyxl.load_workbook(PLANTILLA_EXCEL)
+        # Se asume que el archivo plantilla está subido al repo de GitHub junto con app.py
+        wb = openpyxl.load_workbook('Acta de Asignación Equipos - V3.xlsx')
         ws = wb.active
         
-        # Mapeo idéntico al local
+        # 1. Datos Generales
         ws['P7'] = str(datos.get('USUARIO', '')).upper()
         ws['G12'] = datetime.now().strftime('%d/%m/%Y')
-        ws['T12'], ws['AG12'] = datos.get('UBICACIÓN','-'), datos.get('DIRECCIÓN','-')
-        ws['G14'], ws['T14'] = datos.get('ÁREA','-'), datos.get('ACTA DE  ASIGNACIÓN','-')
+        ws['T12'] = datos.get('UBICACIÓN','-')
+        ws['AG12'] = datos.get('DIRECCIÓN','-')
+        ws['G14'] = datos.get('ÁREA','-')
+        ws['T14'] = datos.get('ACTA DE  ASIGNACIÓN','-')
         
-        # Lógica de componentes asociados
-        e_u = df_completo[df_completo['USUARIO'] == datos.get('USUARIO')]
-        mons = e_u[e_u['TIPO'].str.contains("MONITOR", case=False, na=False)]['NRO DE SERIE'].tolist()
-        ws['Q18'] = " / ".join(mons) if mons else datos.get('COMPONENTE', '-')
+        # 2. Lógica Componentes (Buscar monitores asociados al usuario)
+        # Filtramos en el DF completo descargado de Supabase
+        usuario_actual = datos.get('USUARIO')
+        if usuario_actual:
+            e_u = df_completo[df_completo['USUARIO'] == usuario_actual]
+            # Buscamos filas que tengan "MONITOR" en el tipo
+            mons = e_u[e_u['TIPO'].str.contains("MONITOR", case=False, na=False)]['NRO DE SERIE'].tolist()
+            ws['Q18'] = " / ".join(mons) if mons else datos.get('COMPONENTE', '-')
         
-        # Checkboxes
+        # 3. Checkboxes Tipo Equipo
         t_p = str(datos.get('TIPO', '')).upper()
         ws['J20'] = "X" if any(x in t_p for x in ["AIO", "ALL IN ONE"]) else ""
         ws['J21'] = "X" if any(x in t_p for x in ["DESKTOP", "CPU"]) else ""
         ws['J22'] = "X" if "LAPTOP" in t_p else ""
         
-        ws['R20'], ws['R21'], ws['R22'] = datos.get('NUEVO ACTIVO','-'), datos.get('NRO DE SERIE','-'), datos.get('EQUIPO','-')
+        # 4. Datos del Equipo Principal
+        ws['R20'] = datos.get('NUEVO ACTIVO','-')
+        ws['R21'] = datos.get('NRO DE SERIE','-')
+        ws['R22'] = datos.get('EQUIPO','-')
 
-        # Accesorios
+        # 5. Checkboxes Accesorios (Tu lógica condicional)
         acc = str(datos.get('ACCESORIOS', '')).lower() 
         if "LAPTOP" in t_p: ws['O24'] = "X"
         else: ws['O24'] = "X" if "cargador" in acc else ""
@@ -307,277 +282,415 @@ def generar_acta_excel(datos, df_completo):
         wb.save(out)
         return out.getvalue()
     except Exception as e:
-        st.error(f"Error generando acta (verificar plantilla): {e}")
+        st.error(f"Error generando acta (verificar que 'Acta de Asignación Equipos - V3.xlsx' esté en el repo): {e}")
         return None
 
-# --- AUTH HÍBRIDA (PARIDAD TOTAL) ---
+def generar_plantilla_carga():
+    """Genera plantilla Excel con validaciones de lista para Carga Masiva"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(COLUMNAS_EXCEL)
+    
+    # Estilo cabecera
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    for cell in ws[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = header_fill
+
+    # Validaciones de Datos (Listas desplegables en Excel)
+    validaciones = {
+        "TIPO": LISTAS_OPCIONES["TIPO"],
+        "ESTADO": LISTAS_OPCIONES["ESTADO"],
+        "MARCA": LISTAS_OPCIONES["MARCA"],
+        "ÁREA": LISTAS_OPCIONES["ÁREA"]
+    }
+    
+    # Aplicar validaciones
+    for col_name, opciones in validaciones.items():
+        if col_name in COLUMNAS_EXCEL:
+            # Convertimos índice 0-based a letra columna
+            col_idx = COLUMNAS_EXCEL.index(col_name) + 1
+            letra = openpyxl.utils.get_column_letter(col_idx)
+            
+            formula = f'"{",".join(opciones)}"'
+            dv = DataValidation(type="list", formula1=formula, allow_blank=True)
+            ws.add_data_validation(dv)
+            dv.add(f"{letra}2:{letra}500") # Aplicar a 500 filas
+
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+# --- LOGIN (Paridad Funcional) ---
 
 def verificar_sesion():
-    if "autenticado" not in st.session_state:
-        st.session_state.autenticado = False
+    if "autenticado" not in st.session_state: st.session_state.autenticado = False
 
-    # Recuperar de cookies
-    c_user = cookies.get("usuario_actual")
-    c_rol = cookies.get("rol_actual")
-    
-    if c_user and c_rol and not st.session_state.autenticado:
-        st.session_state.autenticado = True
-        st.session_state.usuario_actual = c_user
-        st.session_state.rol_actual = c_rol
+    # 1. Cookies
+    if not st.session_state.autenticado:
+        c_user = cookies.get("usuario_actual")
+        c_rol = cookies.get("rol_actual")
+        if c_user and c_rol:
+            st.session_state.autenticado = True
+            st.session_state.usuario_actual = c_user
+            st.session_state.rol_actual = c_rol
 
-    # Callback de Microsoft
+    # 2. Callback Microsoft
     if "code" in st.query_params:
         try:
-            ms_app = msal.ConfidentialClientApplication(CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET)
-            res = ms_app.acquire_token_by_authorization_code(st.query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI)
-            if "error" not in res:
-                email = res.get("id_token_claims").get("preferred_username").lower()
-                db = cargar_usuarios()
-                user_match = db[db["usuario"].str.lower() == email]
+            app = msal.ConfidentialClientApplication(CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET)
+            result = app.acquire_token_by_authorization_code(st.query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI)
+            if "error" not in result:
+                email = result.get("id_token_claims").get("preferred_username").lower()
+                # Verificar en DB
+                df_u = cargar_usuarios()
+                user_match = df_u[df_u["usuario"].str.lower() == email]
                 
                 if not user_match.empty:
                     st.session_state.autenticado = True
                     st.session_state.usuario_actual = email
                     st.session_state.rol_actual = user_match.iloc[0]["rol"]
-                    
                     cookies["usuario_actual"] = email
                     cookies["rol_actual"] = st.session_state.rol_actual
                     cookies.save()
-                    
-                    registrar_log("LOGIN_MS", "Inicio con Microsoft")
+                    registrar_log("LOGIN_MS", "Acceso Microsoft Exitoso")
                     st.query_params.clear()
                     st.rerun()
                 else:
-                    st.error(f"El usuario {email} no tiene permisos configurados en la Base de Datos.")
+                    st.error("Usuario no autorizado en base de datos.")
         except Exception as e:
-            st.error(f"Error Auth MS: {e}")
+            st.error(f"Error Login MS: {e}")
 
-    # Pantalla Login
+    # 3. Formulario Login
     if not st.session_state.autenticado:
         st.markdown("<h1 style='text-align: center;'>☁️ Gestión de Inventario TI (Nube)</h1>", unsafe_allow_html=True)
-        
-        _, col_login, _ = st.columns([1, 1.2, 1])
-        with col_login:
+        col1, col2, col3 = st.columns([1, 1.2, 1])
+        with col2:
             # Botón Microsoft
-            ms_app = msal.ConfidentialClientApplication(CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET)
-            url_auth = ms_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
-            st.link_button("🟦 Iniciar Sesión con Microsoft 365", url_auth, use_container_width=True)
+            app = msal.ConfidentialClientApplication(CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET)
+            auth_url = app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
+            st.link_button("🟦 Iniciar con Microsoft 365", auth_url, use_container_width=True)
             
             st.divider()
             
             # Login Local
             with st.expander("🔐 Acceso Local"):
-                with st.form("login_local"):
+                with st.form("local_login"):
                     u = st.text_input("Usuario")
                     p = st.text_input("Clave", type="password")
                     if st.form_submit_button("Entrar", use_container_width=True):
-                        db = cargar_usuarios()
-                        row = db[(db["usuario"].str.lower() == u.lower()) & (db["clave"] == p)]
-                        if not row.empty:
+                        df_u = cargar_usuarios()
+                        match = df_u[(df_u["usuario"].str.lower() == u.lower()) & (df_u["clave"] == p)]
+                        if not match.empty:
                             st.session_state.autenticado = True
-                            st.session_state.usuario_actual = row.iloc[0]["usuario"]
-                            st.session_state.rol_actual = row.iloc[0]["rol"]
+                            st.session_state.usuario_actual = match.iloc[0]["usuario"]
+                            st.session_state.rol_actual = match.iloc[0]["rol"]
                             cookies["usuario_actual"] = st.session_state.usuario_actual
                             cookies["rol_actual"] = st.session_state.rol_actual
                             cookies.save()
-                            registrar_log("LOGIN_LOCAL", "Inicio de sesión manual")
+                            registrar_log("LOGIN_LOCAL", "Acceso Local Exitoso")
                             st.rerun()
                         else:
-                            st.error("Credenciales incorrectas")
+                            st.error("Credenciales inválidas")
         st.stop()
     return True
 
-# --- MAIN APP ---
+# --- APLICACIÓN PRINCIPAL ---
 
 if verificar_sesion():
     # SIDEBAR
     with st.sidebar:
-        st.title("⚙️ Opciones")
-        st.write(f"Usuario: **{st.session_state.usuario_actual}**")
-        st.write(f"Rol: `{st.session_state.rol_actual}`")
+        st.title("⚙️ Panel Usuario")
+        st.write(f"👤 **{st.session_state.usuario_actual}**")
+        st.info(f"Rol: {st.session_state.rol_actual}")
+        
+        # Cambio Clave Local
+        df_u = cargar_usuarios()
+        curr = df_u[df_u["usuario"] == st.session_state.usuario_actual]
+        if not curr.empty and curr.iloc[0]["clave"] != "MS_365_ACCESS":
+            with st.expander("Cambiar Clave Local"):
+                n_p = st.text_input("Nueva Clave", type="password")
+                if st.button("Actualizar"):
+                    ok, m = actualizar_clave_local(st.session_state.usuario_actual, n_p)
+                    if ok: st.success(m)
+                    else: st.error(m)
         
         if st.button("🚪 Cerrar Sesión", use_container_width=True):
-            registrar_log("LOGOUT", "Sesión cerrada")
-            for k in ["usuario_actual", "rol_actual"]: 
-                if k in cookies: del cookies[k]
+            registrar_log("LOGOUT", "Salida del sistema")
+            cookies["usuario_actual"] = ""
+            cookies["rol_actual"] = ""
             cookies.save()
             st.session_state.clear()
             st.rerun()
 
-    # CARGA DE DATOS CENTRALIZADA
+    # HEADER Y LOGO
+    c_head, c_logo = st.columns([3, 1])
+    with c_head: st.title("🖥️ Gestión de Inventario TI")
+    
+    # CARGA DATOS
     df = obtener_datos()
-    
-    # INTERFAZ PRINCIPAL
-    titulos = ["📊 Dashboard", "🔎 Consultar", "➕ Nuevo", "📥 Carga Masiva", "✏️ Editar/Acta"]
+
+    # TABS
+    pestanas = ["📊 Dashboard", "🔎 Consultar", "➕ Nuevo", "📥 Carga Masiva", "✏️ Editar/Acta"]
     if st.session_state.rol_actual == "Administrador":
-        titulos += ["📜 Logs", "👥 Usuarios"]
-        
-    tabs = st.tabs(titulos)
+        pestanas += ["📜 Logs", "👥 Usuarios"]
     
-    # 1. DASHBOARD
+    tabs = st.tabs(pestanas)
+
+    # 1. DASHBOARD (Lógica exacta app_v13)
     with tabs[0]:
-        st.subheader("📊 Tablero de Control")
-        # Filtros iguales al local
-        with st.expander("🔎 Filtros"):
-            c1, c2, c3 = st.columns(3)
-            with c1: f_area = st.multiselect("Área", df["ÁREA"].unique())
-            with c2: f_tipo = st.multiselect("Tipo", df["TIPO"].unique())
-            with c3: f_estado = st.multiselect("Estado", df["ESTADO"].unique())
+        st.subheader("Tablero de Control")
+        
+        # Filtros Dinámicos (Aprenden de la DB + Listas Base)
+        with st.expander("🔎 Filtros Avanzados", expanded=False):
+            fc1, fc2, fc3 = st.columns(3)
             
-        df_view = df.copy()
-        if f_area: df_view = df_view[df_view["ÁREA"].isin(f_area)]
-        if f_tipo: df_view = df_view[df_view["TIPO"].isin(f_tipo)]
-        if f_estado: df_view = df_view[df_view["ESTADO"].isin(f_estado)]
+            # Combinamos listas base con valores reales en DB para los filtros
+            opts_area = sorted(list(set(LISTAS_OPCIONES["ÁREA"] + df["ÁREA"].unique().tolist())))
+            opts_tipo = sorted(list(set(LISTAS_OPCIONES["TIPO"] + df["TIPO"].unique().tolist())))
+            opts_estado = sorted(list(set(LISTAS_OPCIONES["ESTADO"] + df["ESTADO"].unique().tolist())))
+            
+            # Limpiar vacíos
+            if "" in opts_area: opts_area.remove("")
+            
+            sel_area = fc1.multiselect("Área", opts_area)
+            sel_tipo = fc2.multiselect("Tipo", opts_tipo)
+            sel_estado = fc3.multiselect("Estado", opts_estado)
         
-        # Métricas
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Activos", len(df_view))
-        m2.metric("Laptops", len(df_view[df_view["TIPO"] == "LAPTOP"]))
-        m3.metric("En Mantenimiento", len(df_view[df_view["ESTADO"] == "MANTENIMIENTO"]))
-        m4.metric("Valor Total (Est)", f"S/ {pd.to_numeric(df_view['COSTO'], errors='coerce').sum():,.2f}")
+        df_d = df.copy()
+        if sel_area: df_d = df_d[df_d["ÁREA"].isin(sel_area)]
+        if sel_tipo: df_d = df_d[df_d["TIPO"].isin(sel_tipo)]
+        if sel_estado: df_d = df_d[df_d["ESTADO"].isin(sel_estado)]
         
-        # Gráficos
+        # KPIs
+        def limpiar_costo(val):
+            try: return float(str(val).replace("S/", "").replace("$", "").replace(",", ""))
+            except: return 0.0
+        
+        df_d["COSTO_NUM"] = df_d["COSTO"].apply(limpiar_costo)
+        
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Activos", len(df_d), border=True)
+        k2.metric("Asignados", len(df_d[df_d["USUARIO"].str.len() > 2]), border=True)
+        k3.metric("En Stock/Mtto", len(df_d[df_d["ESTADO"].isin(["EN REVISIÓN", "MANTENIMIENTO", "OPERATIVO"]) & (df_d["USUARIO"].str.len() < 3)]), border=True)
+        k4.metric("Valor Total", f"S/ {df_d['COSTO_NUM'].sum():,.2f}", border=True)
+        
+        st.divider()
+        
         g1, g2 = st.columns(2)
         with g1:
-            st.plotly_chart(px.pie(df_view, names="ESTADO", title="Estado de Equipos"), use_container_width=True)
+            if not df_d.empty:
+                pie_data = df_d["TIPO"].value_counts().reset_index()
+                pie_data.columns = ["Tipo", "Conteo"]
+                st.plotly_chart(px.pie(pie_data, values="Conteo", names="Tipo", title="Distribución por Tipo"), use_container_width=True)
         with g2:
-            st.plotly_chart(px.bar(df_view, x="ÁREA", color="TIPO", title="Equipos por Área"), use_container_width=True)
+            if not df_d.empty:
+                bar_data = df_d["ÁREA"].value_counts().head(10).reset_index()
+                bar_data.columns = ["Área", "Equipos"]
+                st.plotly_chart(px.bar(bar_data, x="Equipos", y="Área", orientation='h', title="Top Áreas"), use_container_width=True)
 
     # 2. CONSULTAR
     with tabs[1]:
+        st.subheader("Búsqueda Detallada")
         st.dataframe(df.drop(columns=["_supabase_id"], errors="ignore"), use_container_width=True, hide_index=True)
 
-    # 3. NUEVO REGISTRO
+    # 3. NUEVO (Formulario Idéntico)
     with tabs[2]:
-        st.markdown("### 🆕 Registro Individual")
+        st.subheader("Registrar Nuevo Activo")
         with st.form("frm_nuevo"):
-            col1, col2 = st.columns(2)
-            nuevo_dato = {}
+            c1, c2, c3 = st.columns(3)
+            datos_nuevos = {}
             
-            with col1:
-                nuevo_dato["USUARIO"] = st.text_input("Usuario Asignado").upper()
-                nuevo_dato["EQUIPO"] = st.text_input("Nombre Equipo (Hostname)").upper()
-                nuevo_dato["TIPO"] = campo_con_opcion_otro("Tipo", LISTAS_OPCIONES["TIPO"], key_suffix="new")
-                nuevo_dato["MARCA"] = campo_con_opcion_otro("Marca", LISTAS_OPCIONES["MARCA"], key_suffix="new")
-                nuevo_dato["MODELO"] = st.text_input("Modelo").upper()
-                nuevo_dato["NRO DE SERIE"] = st.text_input("Nro Serie").upper()
-                
-            with col2:
-                nuevo_dato["ÁREA"] = st.selectbox("Área", LISTAS_OPCIONES["ÁREA"])
-                nuevo_dato["ESTADO"] = st.selectbox("Estado", LISTAS_OPCIONES["ESTADO"])
-                nuevo_dato["UBICACIÓN"] = st.text_input("Ubicación Física").upper()
-                nuevo_dato["NUEVO ACTIVO"] = st.text_input("Código Patrimonial").upper()
-                nuevo_dato["ACCESORIOS"] = st.text_area("Accesorios (separar por comas)").upper()
+            # Usamos tu función 'campo_con_opcion_otro' para mantener flexibilidad
+            with c1:
+                datos_nuevos["USUARIO"] = st.text_input("Usuario Asignado").upper()
+                datos_nuevos["ÁREA"] = campo_con_opcion_otro("Área", LISTAS_OPCIONES["ÁREA"], key_suffix="n1")
+                datos_nuevos["UBICACIÓN"] = st.text_input("Ubicación Física").upper()
+                datos_nuevos["DIRECCIÓN"] = st.text_input("Dirección").upper()
             
-            nuevo_dato["OBSERVACIONES"] = st.text_area("Observaciones").upper()
+            with c2:
+                datos_nuevos["TIPO"] = campo_con_opcion_otro("Tipo", LISTAS_OPCIONES["TIPO"], key_suffix="n2")
+                datos_nuevos["MARCA"] = campo_con_opcion_otro("Marca", LISTAS_OPCIONES["MARCA"], key_suffix="n3")
+                datos_nuevos["MODELO"] = st.text_input("Modelo").upper()
+                datos_nuevos["EQUIPO"] = st.text_input("Hostname Equipo").upper()
             
-            if st.form_submit_button("💾 Guardar Registro", use_container_width=True):
-                if agregar_registro_bd(nuevo_dato):
-                    st.success("Registro guardado en Nube!")
-                    registrar_log("CREAR", f"Alta de equipo {nuevo_dato['EQUIPO']}")
-                    time.sleep(1)
-                    st.rerun()
+            with c3:
+                datos_nuevos["NRO DE SERIE"] = st.text_input("Nro de Serie").upper()
+                datos_nuevos["NUEVO ACTIVO"] = st.text_input("Cod. Nuevo Activo").upper()
+                datos_nuevos["ESTADO"] = campo_con_opcion_otro("Estado", LISTAS_OPCIONES["ESTADO"], key_suffix="n4")
+                datos_nuevos["COSTO"] = st.text_input("Costo").upper()
 
-    # 4. CARGA MASIVA
-    with tabs[3]:
-        st.info("Funcionalidad simplificada para Nube: Subir Excel con columnas exactas.")
-        upl = st.file_uploader("Subir Excel", type=["xlsx"])
-        if upl:
-            df_up = pd.read_excel(upl)
-            st.dataframe(df_up.head())
-            if st.button("Procesar Carga"):
-                count = 0
-                progress = st.progress(0)
-                for idx, row in df_up.iterrows():
-                    # Convertimos la fila a dict y filtramos nan
-                    d_row = row.dropna().to_dict()
-                    # Aseguramos strings
-                    d_row = {k: str(v) for k, v in d_row.items()}
-                    agregar_registro_bd(d_row)
-                    count += 1
-                    progress.progress(min(count / len(df_up), 1.0))
-                st.success(f"Se cargaron {count} registros.")
-                st.rerun()
-
-    # 5. EDITAR / ACTA
-    with tabs[4]:
-        st.markdown("### ✏️ Edición y Gestión de Actas")
-        
-        # Buscador inteligente
-        busqueda = st.text_input("🔍 Buscar por Usuario, Serie o Activo:", placeholder="Escriba para filtrar...")
-        
-        if busqueda:
-            mask = df.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)
-            df_filt = df[mask]
-        else:
-            df_filt = df.head(10) # Mostrar solo primeros 10 si no hay búsqueda para no saturar
+            datos_nuevos["ACCESORIOS"] = st.text_area("Accesorios (mouse, teclado, cargador...)").upper()
+            datos_nuevos["OBSERVACIONES"] = st.text_area("Observaciones").upper()
             
-        if not df_filt.empty:
-            # Selector de registro para editar
-            opciones_editar = df_filt.apply(lambda x: f"{x['USUARIO']} - {x['TIPO']} - {x['NRO DE SERIE']}", axis=1).tolist()
-            seleccion = st.selectbox("Seleccione activo a gestionar:", opciones_editar)
-            
-            if seleccion:
-                # Recuperar el ID original de Supabase
-                idx_sel = opciones_editar.index(seleccion)
-                registro_sel = df_filt.iloc[idx_sel]
-                id_supabase = registro_sel.get("_supabase_id") 
-                
-                with st.expander("📝 Editar Datos", expanded=True):
-                    with st.form("frm_edit"):
-                        c_e1, c_e2 = st.columns(2)
-                        with c_e1:
-                            u_ed = st.text_input("Usuario", value=registro_sel["USUARIO"])
-                            s_ed = st.text_input("Serie", value=registro_sel["NRO DE SERIE"])
-                            e_ed = st.selectbox("Estado", LISTAS_OPCIONES["ESTADO"], index=LISTAS_OPCIONES["ESTADO"].index(registro_sel["ESTADO"]) if registro_sel["ESTADO"] in LISTAS_OPCIONES["ESTADO"] else 0)
-                        with c_e2:
-                            obs_ed = st.text_area("Observaciones", value=registro_sel["OBSERVACIONES"])
-                            acc_ed = st.text_area("Accesorios", value=registro_sel["ACCESORIOS"])
-                        
-                        if st.form_submit_button("Actualizar Datos"):
-                            cambios = {
-                                "USUARIO": u_ed, "NRO DE SERIE": s_ed, 
-                                "ESTADO": e_ed, "OBSERVACIONES": obs_ed, "ACCESORIOS": acc_ed
-                            }
-                            if editar_registro_bd(id_supabase, cambios):
-                                st.success("Actualizado")
-                                registrar_log("EDITAR", f"ID {id_supabase} actualizado")
-                                time.sleep(1)
-                                st.rerun()
-                
-                c_acta, c_borrar = st.columns(2)
-                with c_acta:
-                    excel_data = generar_acta_excel(registro_sel.to_dict(), df)
-                    if excel_data:
-                        n_file = f"Acta_{registro_sel['USUARIO']}_{registro_sel['TIPO']}.xlsx"
-                        st.download_button("📥 Descargar Acta Excel", data=excel_data, file_name=n_file)
-                
-                with c_borrar:
-                    if st.button("🗑️ Eliminar Registro", type="primary"):
-                        eliminar_registro_bd(id_supabase)
-                        registrar_log("ELIMINAR", f"ID {id_supabase} eliminado")
-                        st.warning("Eliminado...")
-                        time.sleep(1)
+            if st.form_submit_button("💾 Guardar Registro"):
+                # Validación duplicados (Serie)
+                if datos_nuevos["NRO DE SERIE"] and datos_nuevos["NRO DE SERIE"] in df["NRO DE SERIE"].values:
+                    st.error(f"Error: El Nro de Serie {datos_nuevos['NRO DE SERIE']} ya existe.")
+                else:
+                    if guardar_registro_db(datos_nuevos, es_nuevo=True):
+                        st.success("✅ Registro guardado en Nube!")
+                        registrar_log("CREAR", f"Activo {datos_nuevos['NRO DE SERIE']} creado")
+                        time.sleep(1.5)
                         st.rerun()
 
-    # TABS ADMIN
+    # 4. CARGA MASIVA (Con plantilla validada)
+    with tabs[3]:
+        st.subheader("Carga Masiva desde Excel")
+        col_down, col_up = st.columns(2)
+        
+        with col_down:
+            st.info("Descargue la plantilla para asegurar el formato.")
+            plantilla = generar_plantilla_carga()
+            st.download_button("📥 Descargar Plantilla .xlsx", data=plantilla, file_name="Plantilla_Carga.xlsx")
+        
+        with col_up:
+            upl_file = st.file_uploader("Subir Plantilla Completa", type=["xlsx"])
+            if upl_file:
+                if st.button("Procesar Archivo"):
+                    try:
+                        df_upload = pd.read_excel(upl_file).fillna("")
+                        # Convertir a str todo
+                        df_upload = df_upload.astype(str)
+                        
+                        progreso = st.progress(0)
+                        total = len(df_upload)
+                        
+                        for idx, row in df_upload.iterrows():
+                            # Filtrar solo columnas válidas
+                            d_row = row.to_dict()
+                            # Convertir keys a mayusculas limpias por si acaso
+                            d_row_clean = {k.strip().upper(): v.strip().upper() for k,v in d_row.items()}
+                            
+                            guardar_registro_db(d_row_clean, es_nuevo=True)
+                            progreso.progress((idx + 1) / total)
+                            
+                        st.success(f"Procesados {total} registros exitosamente.")
+                        registrar_log("CARGA_MASIVA", f"{total} registros importados")
+                        time.sleep(2)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error procesando archivo: {e}")
+
+    # 5. EDITAR / ACTA (La joya de la corona)
+    with tabs[4]:
+        st.subheader("Edición y Gestión de Actas")
+        
+        # Buscador Inteligente
+        termino = st.text_input("🔍 Buscar por: Usuario, Serie o Nuevo Activo", placeholder="Escriba para buscar...")
+        
+        df_res = pd.DataFrame()
+        if termino:
+            t = termino.upper()
+            df_res = df[
+                df["USUARIO"].str.contains(t) | 
+                df["NRO DE SERIE"].str.contains(t) | 
+                df["NUEVO ACTIVO"].str.contains(t) |
+                df["EQUIPO"].str.contains(t)
+            ]
+        
+        if not df_res.empty:
+            # Dropdown selector
+            opciones = df_res.apply(lambda x: f"{x['USUARIO']} | {x['TIPO']} | S/N: {x['NRO DE SERIE']}", axis=1).tolist()
+            seleccion = st.selectbox("Seleccione registro:", opciones)
+            
+            if seleccion:
+                idx_real = opciones.index(seleccion)
+                registro = df_res.iloc[idx_real]
+                id_supabase = registro["_supabase_id"]
+                
+                st.write("---")
+                col_ed, col_acta = st.columns([1.5, 1])
+                
+                with col_ed:
+                    st.markdown("#### ✏️ Editar Datos")
+                    with st.form("frm_edicion"):
+                        # Campos principales editables
+                        ne_user = st.text_input("Usuario", registro["USUARIO"])
+                        ne_serie = st.text_input("Nro Serie", registro["NRO DE SERIE"])
+                        ne_area = campo_con_opcion_otro("Área", LISTAS_OPCIONES["ÁREA"], registro["ÁREA"], "ed1")
+                        ne_estado = campo_con_opcion_otro("Estado", LISTAS_OPCIONES["ESTADO"], registro["ESTADO"], "ed2")
+                        ne_obs = st.text_area("Observaciones", registro["OBSERVACIONES"])
+                        ne_acc = st.text_area("Accesorios", registro["ACCESORIOS"])
+                        
+                        if st.form_submit_button("Actualizar"):
+                            cambios = {
+                                "USUARIO": ne_user, "NRO DE SERIE": ne_serie,
+                                "ÁREA": ne_area, "ESTADO": ne_estado,
+                                "OBSERVACIONES": ne_obs, "ACCESORIOS": ne_acc
+                            }
+                            # Preservar datos no editados para no borrarlos
+                            # (En esta implementación simple pasamos solo cambios, o todo el dict actualizado)
+                            registro_dict = registro.to_dict()
+                            registro_dict.update(cambios)
+                            
+                            if guardar_registro_db(registro_dict, es_nuevo=False, id_supabase=id_supabase):
+                                st.success("Actualizado correctamente")
+                                registrar_log("EDICION", f"ID {id_supabase} modificado")
+                                time.sleep(1)
+                                st.rerun()
+
+                with col_acta:
+                    st.markdown("#### 📄 Generar Acta")
+                    st.info(f"Usuario: {registro['USUARIO']}")
+                    
+                    excel_acta = generar_acta_excel(registro.to_dict(), df)
+                    if excel_acta:
+                        n_arch = f"Acta_{registro['USUARIO']}_{registro['NRO DE SERIE']}.xlsx"
+                        st.download_button("📥 Descargar Acta Excel", data=excel_acta, file_name=n_arch)
+                    else:
+                        st.warning("No se pudo generar el acta (Falta plantilla en repo).")
+                        
+                    st.divider()
+                    if st.button("🗑️ Eliminar Registro", type="primary"):
+                        try:
+                            supabase.table('inventario').delete().eq('id', id_supabase).execute()
+                            registrar_log("ELIMINAR", f"ID {id_supabase} borrado")
+                            st.success("Eliminado")
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error borrando: {e}")
+        elif termino:
+            st.warning("No se encontraron coincidencias.")
+
+    # 6. LOGS (ADMIN)
     if st.session_state.rol_actual == "Administrador":
-        with tabs[5]: # LOGS
-            st.write("### Auditoría")
+        with tabs[5]:
+            st.subheader("Auditoría de Sistema")
             try:
-                logs = supabase.table('logs_auditoria').select("*").order('fecha', desc=True).limit(50).execute()
+                logs = supabase.table('logs_auditoria').select("*").order('fecha', desc=True).limit(200).execute()
                 st.dataframe(pd.DataFrame(logs.data), use_container_width=True)
-            except: st.error("No se pudo cargar logs")
+            except: st.info("No hay logs disponibles aún.")
+
+    # 7. USUARIOS (ADMIN)
+    if st.session_state.rol_actual == "Administrador":
+        with tabs[6]:
+            st.subheader("Gestión de Accesos")
+            col_u1, col_u2 = st.columns(2)
             
-        with tabs[6]: # USUARIOS
-            st.write("### Gestión de Accesos")
-            df_users = cargar_usuarios()
-            st.dataframe(df_users, use_container_width=True)
-            
-            with st.form("add_user"):
-                nu = st.text_input("Nuevo Correo/Usuario")
-                nr = st.selectbox("Rol", ["Soporte", "Administrador"])
-                if st.form_submit_button("Autorizar"):
-                    ok, msg = guardar_nuevo_usuario(nu, nr)
-                    if ok: st.success(msg); time.sleep(1); st.rerun()
-                    else: st.error(msg)
+            with col_u1:
+                st.write("### Agregar Usuario")
+                with st.form("new_user"):
+                    nu_mail = st.text_input("Correo / Usuario")
+                    nu_rol = st.selectbox("Rol", ["Soporte", "Administrador"])
+                    if st.form_submit_button("Autorizar"):
+                        ok, m = guardar_nuevo_usuario(nu_mail, nu_rol)
+                        if ok: st.success(m); time.sleep(1); st.rerun()
+                        else: st.error(m)
+                
+                st.write("---")
+                st.write("### Eliminar Usuario")
+                df_u = cargar_usuarios()
+                # Excluirse a sí mismo
+                lista_del = [u for u in df_u["usuario"].tolist() if u != st.session_state.usuario_actual]
+                u_del = st.selectbox("Seleccione usuario a revocar", lista_del)
+                if st.button("Revocar Permisos", type="primary"):
+                    supabase.table('usuarios').delete().eq('usuario', u_del).execute()
+                    st.success(f"Usuario {u_del} eliminado.")
+                    st.rerun()
+
+            with col_u2:
+                st.write("### Usuarios Actuales")
+                st.dataframe(cargar_usuarios(), use_container_width=True)
