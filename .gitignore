@@ -1,0 +1,68 @@
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (no subir a GitHub)
+*.xlsx
+*.xls
+*.csv
+*.txt
+BD_MAESTRA_FULL.xlsx
+users_db.csv
+log_actividad.txt
+
+# Scripts de migración (solo para uso local)
+migrar_datos.py
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+temp/
+tmp/
+*.tmp

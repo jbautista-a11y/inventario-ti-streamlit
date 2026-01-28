@@ -1,0 +1,32 @@
+# Dependencias principales
+streamlit==1.31.0
+pandas==2.2.0
+numpy==1.26.0
+
+# Excel y archivos
+openpyxl==3.1.2
+xlsxwriter==3.1.9
+
+# Visualización
+plotly==5.18.0
+
+# Azure SDK
+azure-identity==1.15.0
+azure-keyvault-secrets==4.7.0
+azure-storage-blob==12.19.0
+msal==1.26.0
+
+# Base de datos
+SQLAlchemy==2.0.25
+psycopg2-binary==2.9.9
+
+# Utilidades
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Cookies y sesiones
+streamlit-cookies-manager==0.2.0
+
+# Logging y monitoreo
+opencensus-ext-azure==1.1.13
+applicationinsights==0.11.10
